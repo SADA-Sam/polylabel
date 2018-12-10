@@ -5,7 +5,7 @@ var Queue = require('tinyqueue');
 module.exports = polylabel;
 module.exports.default = polylabel;
 
-function polylabel(polygon, precision, debug, maxTolerance = 0.0) {
+function polylabel(polygon, precision, debug, tolerance = 0.0) {
     precision = precision || 1.0;
 
     // find the bounding box of the outer ring
@@ -26,7 +26,7 @@ function polylabel(polygon, precision, debug, maxTolerance = 0.0) {
     if (cellSize === 0) return [minX, minY];
 
     // a priority queue of cells in order of their "potential" (max distance to polygon)
-    var cellQueue = new Queue(null, getCompareFunction(maxTolerance));
+    var cellQueue = new Queue(null, compareMax);
 
     var centroid = getCentroid(polygon);
 
@@ -37,12 +37,14 @@ function polylabel(polygon, precision, debug, maxTolerance = 0.0) {
         }
     }
 
+    var compareCells = getCompareCells(tolerance);
+
     // take centroid as the first best guess
     var bestCell = new Cell(centroid[0], centroid[1], 0, polygon, centroid[0], centroid[1]);
 
     // special case for rectangular polygons
     var bboxCell = new Cell(minX + width / 2, minY + height / 2, 0, polygon, centroid[0], centroid[1]);
-    if (bboxCell.d > bestCell.d) bestCell = bboxCell;
+    if (compareCells(bboxCell, bestCell)) bestCell = bboxCell;
 
     var numProbes = cellQueue.length;
 
@@ -51,7 +53,7 @@ function polylabel(polygon, precision, debug, maxTolerance = 0.0) {
         var cell = cellQueue.pop();
 
         // update the best cell if we found a better one
-        if (cell.d > bestCell.d) {
+        if (compareCells(cell, bestCell)) {
             bestCell = cell;
             if (debug) console.log('found best %d after %d probes', Math.round(1e4 * cell.d) / 1e4, numProbes);
         }
@@ -76,20 +78,24 @@ function polylabel(polygon, precision, debug, maxTolerance = 0.0) {
     return [bestCell.x, bestCell.y];
 }
 
-function getCompareFunction(maxTolerance = 0.0) {
+function compareMax(a, b) {
+    return b.max - a.max;
+}
+
+function getCompareCells(maxTolerance = 0.0) {
     if (maxTolerance !== 0.0) {
-        return (a, b) => {
-            var d = b.max - a.max;
-            // If delta max is within tolerance, treat them as the same and fall back to centroid comparison
-            if (Math.abs(d) <= maxTolerance * Math.min(Math.abs(b.max), Math.abs(a.max))) {
-                return b.c - a.c;
+        return (candidate, best) => {
+            var diff = candidate.d - best.d;
+            // If difference is within tolerance, treat them as the same use closest to centroid
+            if (Math.abs(diff) <= maxTolerance * Math.min(Math.abs(candidate.d), Math.abs(best.d))) {
+                return candidate.c < best.c;
             }
-            return d;
+            return diff > 0;
         }
     }
 
-    return (a, b) => {
-        return b.max - a.max;
+    return (candidate, best) => {
+        candidate.d > best.d;
     }
 }
 
