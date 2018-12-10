@@ -5,7 +5,7 @@ var Queue = require('tinyqueue');
 module.exports = polylabel;
 module.exports.default = polylabel;
 
-function polylabel(polygon, precision, debug) {
+function polylabel(polygon, precision, debug, maxTolerance = 0.0) {
     precision = precision || 1.0;
 
     // find the bounding box of the outer ring
@@ -26,20 +26,22 @@ function polylabel(polygon, precision, debug) {
     if (cellSize === 0) return [minX, minY];
 
     // a priority queue of cells in order of their "potential" (max distance to polygon)
-    var cellQueue = new Queue(null, compareMax);
+    var cellQueue = new Queue(null, getCompareFunction(maxTolerance));
+
+    var centroid = getCentroid(polygon);
 
     // cover polygon with initial cells
     for (var x = minX; x < maxX; x += cellSize) {
         for (var y = minY; y < maxY; y += cellSize) {
-            cellQueue.push(new Cell(x + h, y + h, h, polygon));
+            cellQueue.push(new Cell(x + h, y + h, h, polygon, centroid[0], centroid[1]));
         }
     }
 
     // take centroid as the first best guess
-    var bestCell = getCentroidCell(polygon);
+    var bestCell = new Cell(centroid[0], centroid[1], 0, polygon, centroid[0], centroid[1]);
 
     // special case for rectangular polygons
-    var bboxCell = new Cell(minX + width / 2, minY + height / 2, 0, polygon);
+    var bboxCell = new Cell(minX + width / 2, minY + height / 2, 0, polygon, centroid[0], centroid[1]);
     if (bboxCell.d > bestCell.d) bestCell = bboxCell;
 
     var numProbes = cellQueue.length;
@@ -59,10 +61,10 @@ function polylabel(polygon, precision, debug) {
 
         // split the cell into four cells
         h = cell.h / 2;
-        cellQueue.push(new Cell(cell.x - h, cell.y - h, h, polygon));
-        cellQueue.push(new Cell(cell.x + h, cell.y - h, h, polygon));
-        cellQueue.push(new Cell(cell.x - h, cell.y + h, h, polygon));
-        cellQueue.push(new Cell(cell.x + h, cell.y + h, h, polygon));
+        cellQueue.push(new Cell(cell.x - h, cell.y - h, h, polygon, centroid[0], centroid[1]));
+        cellQueue.push(new Cell(cell.x + h, cell.y - h, h, polygon, centroid[0], centroid[1]));
+        cellQueue.push(new Cell(cell.x - h, cell.y + h, h, polygon, centroid[0], centroid[1]));
+        cellQueue.push(new Cell(cell.x + h, cell.y + h, h, polygon, centroid[0], centroid[1]));
         numProbes += 4;
     }
 
@@ -74,16 +76,31 @@ function polylabel(polygon, precision, debug) {
     return [bestCell.x, bestCell.y];
 }
 
-function compareMax(a, b) {
-    return b.max - a.max;
+function getCompareFunction(maxTolerance = 0.0) {
+    if (maxTolerance !== 0.0) {
+        return (a, b) => {
+            var d = b.max - a.max;
+            // If delta max is within tolerance, treat them as the same and fall back to centroid comparison
+            if (Math.abs(d) <= maxTolerance * Math.min(Math.abs(b.max), Math.abs(a.max))) {
+                return b.c - a.c;
+            }
+            return d;
+        }
+    }
+
+    return (a, b) => {
+        return b.max - a.max;
+    }
 }
 
-function Cell(x, y, h, polygon) {
+function Cell(x, y, h, polygon, cx, cy) {
     this.x = x; // cell center x
     this.y = y; // cell center y
     this.h = h; // half the cell size
     this.d = pointToPolygonDist(x, y, polygon); // distance from cell center to polygon
     this.max = this.d + this.h * Math.SQRT2; // max distance to polygon within a cell
+    var c = [ x - cx, y - cy ];
+    this.c = Math.sqrt(c[0] * c[0]) + (c[1] * c[1]); // distance from cell center to polygon centroid
 }
 
 // signed distance from point to polygon outline (negative if point is outside)
@@ -109,7 +126,7 @@ function pointToPolygonDist(x, y, polygon) {
 }
 
 // get polygon centroid
-function getCentroidCell(polygon) {
+function getCentroid(polygon) {
     var area = 0;
     var x = 0;
     var y = 0;
@@ -123,8 +140,7 @@ function getCentroidCell(polygon) {
         y += (a[1] + b[1]) * f;
         area += f * 3;
     }
-    if (area === 0) return new Cell(points[0][0], points[0][1], 0, polygon);
-    return new Cell(x / area, y / area, 0, polygon);
+    return (area === 0) ? points[0] : [x / area, y / area];
 }
 
 // get squared distance from a point to a segment
